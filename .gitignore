@@ -1,0 +1,11 @@
+build/
+.cache/
+data/
+*.o
+*.a
+*.so
+*.dylib
+*.log
+.DS_Store
+__pycache__/
+*.pyc
