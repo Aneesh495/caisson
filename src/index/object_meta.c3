@@ -17,6 +17,7 @@ struct ObjectMeta {
     usz version_id_len;
     ulong size;
     char[33] etag;
+    usz etag_len;
     char[64] content_type;
     usz content_type_len;
     long last_modified;
@@ -47,6 +48,7 @@ fn ObjectMeta object_meta_init(
     usz etag_len = etag.len < 32 ? etag.len : 32;
     mem::copy(&meta.etag[0], etag.ptr, (sz)etag_len);
     meta.etag[etag_len] = '\0';
+    meta.etag_len = etag_len;
 
     meta.content_type_len = content_type.len < 63 ? content_type.len : 63;
     if (meta.content_type_len > 0) {
