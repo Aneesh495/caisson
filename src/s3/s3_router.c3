@@ -7,6 +7,7 @@ module caisson::s3;
 
 import caisson::core;
 import caisson::http;
+import caisson::web;
 
 // Decomposes an S3 path "/bucket/key" into bucket and object key parts.
 fn void split_s3_path(String raw_path, String* out_bucket, String* out_key) {
@@ -43,7 +44,13 @@ fn void s3_route_request(http::HttpRequest* req, http::HttpResponse* resp, void*
 
     S3Context* ctx = (S3Context*)user_data;
 
-    // Root path: ListAllMyBuckets or Web Dashboard
+    // Check for web administrative console, Prometheus metrics, or health checks
+    if (web::is_web_or_telemetry_route(req)) {
+        web::handle_web_route(ctx, req, resp);
+        return;
+    }
+
+    // Root path: ListAllMyBuckets
     if (req.path.len == 0 || req.path == "/") {
         if (req.method == http::HttpMethod.GET) {
             handle_list_buckets(ctx, req, resp);
