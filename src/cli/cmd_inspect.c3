@@ -61,10 +61,12 @@ fn int run_inspect_command(String path) {
         key_buf[hdr.key_size] = '\0';
         String key_str = (String)key_buf[0 : hdr.key_size];
 
-        // Seek or read value to verify CRC
+        // Compute CRC over Key || Value matching Bitcask record format
         bool crc_ok = true;
-        uint computed_crc = hash::crc32c_calculate(&hdr_buf[4], storage::RECORD_HEADER_SIZE - 4);
-        computed_crc = hash::crc32c_update(computed_crc, key_buf, (usz)hdr.key_size);
+        uint computed_crc = 0;
+        if (hdr.key_size > 0) {
+            computed_crc = hash::crc32c_calculate(key_buf, (usz)hdr.key_size);
+        }
 
         if (hdr.val_size > 0) {
             char* val_buf = (char*)mem::malloc((sz)hdr.val_size);
@@ -77,7 +79,9 @@ fn int run_inspect_command(String path) {
             mem::free(val_buf);
         }
 
-        if (computed_crc != hdr.checksum) {
+        if (hdr.is_deleted != 0 && hdr.checksum == 0) {
+            crc_ok = true;
+        } else if (computed_crc != hdr.checksum) {
             crc_ok = false;
             corrupt_records++;
         }
