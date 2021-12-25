@@ -220,8 +220,9 @@ fn core::Result Bitcask.delete(&this, String key) {
     }
 
     long now = core::current_time_seconds();
+    uint crc = key.len > 0 ? hash::crc32c_calculate(key.ptr, key.len) : 0;
     RecordHeader header = {
-        .checksum = 0,
+        .checksum = crc,
         .timestamp = now,
         .key_size = (uint)key.len,
         .val_size = 0,
