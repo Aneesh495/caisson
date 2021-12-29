@@ -34,6 +34,13 @@ fn void HttpResponse.set_status(&this, int code, String text) {
     this.status_text = text;
 }
 
+fn bool HttpResponse.has_header(&this, String name) {
+    for (usz i = 0; i < this.header_count; i++) {
+        if (ascii_case_eq(this.headers[i].name, name)) return true;
+    }
+    return false;
+}
+
 fn void HttpResponse.add_header(&this, String name, String value) {
     if (this.header_count < MAX_HTTP_HEADERS) {
         this.headers[this.header_count] = (HttpHeader){
@@ -102,12 +109,14 @@ fn void HttpResponse.serialize(&this, core::Buffer* out_buf) {
     out_buf.append_bytes(&date_str[0], 29);
     out_buf.append_string("\r\n");
 
-    // 4. Content-Length header
-    char[32] cl_buf;
-    usz cl_len = int_to_ascii((long)this.body.len, &cl_buf[0]);
-    out_buf.append_string("Content-Length: ");
-    out_buf.append_bytes(&cl_buf[0], cl_len);
-    out_buf.append_string("\r\n");
+    // 4. Content-Length header (if not explicitly overridden by handler)
+    if (!this.has_header("Content-Length")) {
+        char[32] cl_buf;
+        usz cl_len = int_to_ascii((long)this.body.len, &cl_buf[0]);
+        out_buf.append_string("Content-Length: ");
+        out_buf.append_bytes(&cl_buf[0], cl_len);
+        out_buf.append_string("\r\n");
+    }
 
     // 5. Connection header
     out_buf.append_string("Connection: close\r\n");
