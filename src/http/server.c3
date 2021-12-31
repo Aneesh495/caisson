@@ -28,17 +28,83 @@ fn HttpServer server_init(ushort port, HttpHandler handler, void* user_data) {
     };
 }
 
+fn sz find_header_end(char* buf, usz len) {
+    if (len < 4) return -1;
+    for (usz i = 0; i <= len - 4; i++) {
+        if (buf[i] == '\r' && buf[i + 1] == '\n' && buf[i + 2] == '\r' && buf[i + 3] == '\n') {
+            return (sz)(i + 4);
+        }
+    }
+    return -1;
+}
+
+fn long find_content_length(char* buf, usz len) {
+    String s = (String)buf[0 : len];
+    if (s.len < 16) return 0;
+    for (usz i = 0; i <= s.len - 15; i++) {
+        if (ascii_char_case_eq(s[i], 'c') &&
+            ascii_char_case_eq(s[i + 1], 'o') &&
+            ascii_char_case_eq(s[i + 2], 'n') &&
+            ascii_char_case_eq(s[i + 3], 't') &&
+            ascii_char_case_eq(s[i + 4], 'e') &&
+            ascii_char_case_eq(s[i + 5], 'n') &&
+            ascii_char_case_eq(s[i + 6], 't') &&
+            s[i + 7] == '-' &&
+            ascii_char_case_eq(s[i + 8], 'l') &&
+            ascii_char_case_eq(s[i + 9], 'e') &&
+            ascii_char_case_eq(s[i + 10], 'n') &&
+            ascii_char_case_eq(s[i + 11], 'g') &&
+            ascii_char_case_eq(s[i + 12], 't') &&
+            ascii_char_case_eq(s[i + 13], 'h') &&
+            s[i + 14] == ':') {
+            usz val_start = i + 15;
+            while (val_start < s.len && (s[val_start] == ' ' || s[val_start] == '\t')) val_start++;
+            usz val_end = val_start;
+            while (val_end < s.len && s[val_end] >= '0' && s[val_end] <= '9') val_end++;
+            if (val_end > val_start) {
+                return parse_long((String)s[val_start : val_end - val_start]);
+            }
+        }
+    }
+    return 0;
+}
+
 // Handles a single incoming TCP client connection:
-// Reads request, parses HTTP/1.1, invokes handler, serializes and sends response, and closes socket.
+// Reads headers and body, parses HTTP/1.1, invokes handler, serializes and sends response, and closes socket.
 fn void HttpServer.process_client(&this, int client_fd) {
     const usz MAX_REQ_SIZE = 65536;
     char[MAX_REQ_SIZE] req_buf;
     sz bytes_read = 0;
 
-    core::Result read_res = socket_read(client_fd, &req_buf[0], MAX_REQ_SIZE, &bytes_read);
-    if (!read_res.is_ok() || bytes_read <= 0) {
+    // Read until headers are fully received
+    sz hdr_end = -1;
+    while (bytes_read < (sz)MAX_REQ_SIZE) {
+        sz n = 0;
+        core::Result r = socket_read(client_fd, &req_buf[bytes_read], MAX_REQ_SIZE - (usz)bytes_read, &n);
+        if (!r.is_ok() || n <= 0) break;
+        bytes_read += n;
+
+        hdr_end = find_header_end(&req_buf[0], (usz)bytes_read);
+        if (hdr_end >= 0) break;
+    }
+
+    if (bytes_read <= 0 || hdr_end < 0) {
         socket_close(client_fd);
         return;
+    }
+
+    // Check if Content-Length requires reading more body payload
+    long cl = find_content_length(&req_buf[0], (usz)hdr_end);
+    if (cl > 0) {
+        usz total_needed = (usz)hdr_end + (usz)cl;
+        if (total_needed > MAX_REQ_SIZE) total_needed = MAX_REQ_SIZE;
+
+        while ((usz)bytes_read < total_needed) {
+            sz n = 0;
+            core::Result r = socket_read(client_fd, &req_buf[bytes_read], total_needed - (usz)bytes_read, &n);
+            if (!r.is_ok() || n <= 0) break;
+            bytes_read += n;
+        }
     }
 
     HttpRequest req;
