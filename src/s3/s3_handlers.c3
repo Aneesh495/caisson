@@ -29,6 +29,22 @@ fn String make_storage_key(String bucket, String key, char* out_buf) {
     return (String)out_buf[0 : idx];
 }
 
+// Helper to construct multipart part key: "mp:<upload_id>/<part_number>"
+fn String make_part_key(String upload_id, uint part_number, char* out_buf) {
+    out_buf[0] = 'm';
+    out_buf[1] = 'p';
+    out_buf[2] = ':';
+    usz idx = 3;
+    mem::copy(out_buf + idx, upload_id.ptr, (sz)upload_id.len);
+    idx += upload_id.len;
+    out_buf[idx++] = '/';
+    char[16] num_buf;
+    usz n_len = http::int_to_ascii((long)part_number, &num_buf[0]);
+    mem::copy(out_buf + idx, &num_buf[0], (sz)n_len);
+    idx += n_len;
+    return (String)out_buf[0 : idx];
+}
+
 // GET / -> ListAllMyBuckets
 fn void handle_list_buckets(S3Context* ctx, http::HttpRequest* req, http::HttpResponse* resp) {
     format_list_buckets_xml(resp, &ctx.bucket_reg);
@@ -307,6 +323,11 @@ fn void handle_upload_part(
         return;
     }
 
+    // Persist part bytes in Bitcask storage WAL
+    char[128] pk_buf;
+    String part_key = make_part_key(upload_id, part_number, &pk_buf[0]);
+    ctx.storage.put(part_key, req.body, req.body_len);
+
     String out_etag = (String)etag_buf[0:32];
     resp.set_status(200, "OK");
     char[64] quoted_etag;
@@ -358,11 +379,31 @@ fn void handle_complete_multipart(
     while (composite_etag_buf[etag_len] != '\0' && etag_len < 63) etag_len++;
     String composite_etag = (String)composite_etag_buf[0 : etag_len];
 
+    // Assemble stored parts into one contiguous object
+    core::Buffer assembled = core::buffer_init(4096);
+    for (uint i = 0; i < part_count; i++) {
+        char[128] pk_buf;
+        String part_key = make_part_key(upload_id, parts[i].part_number, &pk_buf[0]);
+        core::Buffer p_buf = core::buffer_init(1024);
+        core::Result r = ctx.storage.get(part_key, &p_buf);
+        if (r.is_ok()) {
+            assembled.append_bytes(p_buf.data, p_buf.len);
+            ctx.storage.delete(part_key);
+        }
+        p_buf.free();
+    }
+
+    // Persist complete object into Bitcask WAL
+    char[512] sk_buf;
+    String storage_key = make_storage_key(bucket, key, &sk_buf[0]);
+    ctx.storage.put(storage_key, assembled.data, assembled.len);
+
     // Record composite object in index
-    index::ObjectMeta meta = index::object_meta_init(bucket, key, 0, composite_etag, "application/octet-stream");
+    index::ObjectMeta meta = index::object_meta_init(bucket, key, (ulong)assembled.len, composite_etag, "application/octet-stream");
     ctx.obj_index.insert(meta);
 
     format_complete_multipart_xml(resp, bucket, key, composite_etag);
+    assembled.free();
 }
 
 // DELETE /<bucket>/<key>?uploadId=Y -> AbortMultipartUpload
@@ -378,6 +419,12 @@ fn void handle_abort_multipart(
     if (!res.is_ok()) {
         format_s3_error(resp, "NoSuchUpload", upload_id, "");
         return;
+    }
+
+    for (uint p = 1; p <= 100; p++) {
+        char[128] pk_buf;
+        String part_key = make_part_key(upload_id, p, &pk_buf[0]);
+        ctx.storage.delete(part_key);
     }
 
     resp.set_status(204, "No Content");
