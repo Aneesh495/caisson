@@ -1,6 +1,8 @@
 build/
+obj/
 .cache/
 data/
+caisson_data/
 *.o
 *.a
 *.so
@@ -9,3 +11,9 @@ data/
 .DS_Store
 __pycache__/
 *.pyc
+*.dSYM/
+test_main*
+test_sock*
+bench_*
+test_run_*
+test_web_*
